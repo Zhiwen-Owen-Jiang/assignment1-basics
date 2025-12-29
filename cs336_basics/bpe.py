@@ -89,40 +89,47 @@ class BPE:
                 
             for vocab, count in self.pre_token_count.items():
                 for i in range(len(vocab) - 1):
-                    self.adjcent_bytes_count[vocab[i:i+2]] += count
-                    self.count_adjcent_bytes[self.adjcent_bytes_count[vocab[i:i+2]]].add(vocab[i:i+2])
+                    self.adjcent_bytes_count[(vocab[i:i+1], vocab[i+1:i+2])] += count
+
+            for token, count in self.adjcent_bytes_count.items():
+                self.count_adjcent_bytes[count].add(token)
                 
-        merges = self.bpe()
-        vocab_list = [x.encode() for x in self.special_tokens] + [bytes(x) for x in range(256)] + merges
+        merges, merged = self.bpe()
+        vocab_list = [x.encode() for x in self.special_tokens] + [bytes(x) for x in range(256)] + merged
         vocab = {i: bytes(x) for i, x in enumerate(vocab_list)}
         
         return vocab, merges
 
     def bpe(self,):
         merges = list()
+        merged = list()
         vocab_size = self.vocab_size - len(self.special_tokens) - 256
 
         while len(merges) < vocab_size:
             max_count = max(self.count_adjcent_bytes.keys())
             bytes_to_merge = max(self.count_adjcent_bytes[max_count])
             merges.append(bytes_to_merge)
+            merged_token = bytes_to_merge[0] + bytes_to_merge[1]
+            merged.append(merged_token)
 
             for pre_token, count in self.pre_token_count.items():
-                for i in range(len(pre_token) - len(bytes_to_merge) + 1):
-                    if bytes_to_merge == pre_token[i:i+len(bytes_to_merge)]:
+                for i in range(len(pre_token) - len(merged_token) + 1):
+                    if merged_token == pre_token[i:i+len(merged_token)]:
                         if i > 0:
-                            self.add(pre_token[i-1:i] + bytes_to_merge, count)
-                            for j in range(1, len(bytes_to_merge)):
-                                self.remove(pre_token[i-1:i] + bytes_to_merge[:j], count)      
+                            self.add((pre_token[i-1:i], merged_token), count)
+                            for j in range(1, len(merged_token)):
+                                # for k in range(i):
+                                    self.remove((pre_token[i-1:i], merged_token[:j]), count)      
 
-                        if i + len(bytes_to_merge) < len(pre_token):
-                            self.add(bytes_to_merge + pre_token[i+len(bytes_to_merge):i+len(bytes_to_merge)+1], count)
-                            for j in range(1, len(bytes_to_merge)):
-                                self.remove(bytes_to_merge[j:] + pre_token[i+len(bytes_to_merge):i+len(bytes_to_merge)+1], count)
+                        if i + len(merged_token) < len(pre_token):
+                            self.add((merged_token, pre_token[i+len(merged_token):i+len(merged_token)+1]), count)
+                            for j in range(1, len(merged_token)):
+                                # for k in range(i+len(merged_token)+1, len(pre_token)+1):
+                                    self.remove((merged_token[j:], pre_token[i+len(merged_token):i+len(merged_token)+1]), count)
                         
                         self.remove(bytes_to_merge, count)
 
-        return merges
+        return merges, merged
 
     def add(self, token, count):
         self.adjcent_bytes_count[token] += count 
@@ -141,7 +148,8 @@ class BPE:
 
 
 if __name__ == '__main__':
-    bpe1 = BPE("/work/users/o/w/owenjf/stanford_cs336/data/toy_example.txt", 256+1+6, ["<|endoftext|>"])
+    # bpe1 = BPE("/work/users/o/w/owenjf/stanford_cs336/data/toy_example.txt", 256+1+6, ["<|endoftext|>"])
+    bpe1 = BPE("/work/users/o/w/owenjf/stanford_cs336/assignment1-basics/tests/fixtures/corpus.en", 500, ["<|endoftext|>"])
     vocab, merges = bpe1.train_bpe()
     vocab, merges
     # train_bpe("/work/users/o/w/owenjf/stanford_cs336/data/toy_example.txt", 256+1+6, ["<|endoftext|>"])
