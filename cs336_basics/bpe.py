@@ -126,7 +126,7 @@ class BPE:
                 self.count2pairs[count].add(pair)
                 
         merges, merged = self.bpe()
-        vocab_list = [x.encode() for x in self.special_tokens] + [bytes(x) for x in range(256)] + merged
+        vocab_list = [x.encode() for x in self.special_tokens] + [bytes([i]) for i in range(256)] + merged
         vocab = {i: bytes(x) for i, x in enumerate(vocab_list)}
         
         return vocab, merges
