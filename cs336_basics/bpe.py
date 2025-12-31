@@ -1,4 +1,5 @@
 import regex as re
+import multiprocessing as mp
 import os
 from typing import BinaryIO, Optional
 from dataclasses import dataclass
@@ -69,6 +70,10 @@ class Word:
     freq: int
 
 
+# per-process cache (each process has its own)
+_WORKER_CACHE = {}
+
+
 class BPE:
     PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -83,6 +88,30 @@ class BPE:
         self.nodes = list()
         self.words = list()
 
+    @staticmethod
+    def count_chunk(args):
+        input_path, start, end, pat_str, special_tokens = args
+        
+        key = (pat_str, tuple(special_tokens))
+        if key not in _WORKER_CACHE:
+            _WORKER_CACHE[key] = (
+                re.compile(pat_str),
+                re.compile("|".join(map(re.escape, special_tokens)))
+            )
+        token_re, split_re = _WORKER_CACHE[key]
+
+        local = defaultdict(int)
+        with open(input_path, "rb") as f:
+            f.seek(start)
+            chunk = f.read(end - start).decode("utf-8", errors="ignore")
+
+            for chunk in split_re.split(chunk):
+                for token in token_re.finditer(chunk):
+                    token_bytes = token.group().encode()
+                    local[token_bytes] += 1
+
+        return dict(local)
+
     def train_bpe(self, desired_num_chunks=100, num_processes=4) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
         if "<|endoftext|>" not in self.special_tokens:
             self.special_tokens.append("<|endoftext|>")
@@ -93,37 +122,33 @@ class BPE:
         with open(self.input_path, "rb") as f:
             boundaries = find_chunk_boundaries(f, desired_num_chunks, b"<|endoftext|>")
 
-            # The following is a serial implementation, but you can parallelize this
-            # by sending each start/end pair to a set of processes.
-            for start, end in zip(boundaries[:-1], boundaries[1:]):
-                f.seek(start)
-                chunk = f.read(end - start).decode("utf-8", errors="ignore")
-                pattern = "|".join(map(re.escape, self.special_tokens))
-                splited_chunk = re.split(pattern, chunk)
-                # splited_chunk = re.split("|".join(special_tokens), chunk)
+        tasks = [
+            (self.input_path, start, end, self.PAT, self.special_tokens)
+            for start, end in zip(boundaries[:-1], boundaries[1:])
+        ]
 
-                for chunk in splited_chunk:
-                    # pre-tokenization
-                    for token in re.finditer(self.PAT, chunk):
-                        token_bytes = token.group().encode()
-                        self.word2freq[token_bytes] += 1
+        with mp.get_context("spawn").Pool(processes=num_processes,) as pool:
+            for local_counts in pool.imap_unordered(self.count_chunk, tasks, chunksize=1):
+                # merge into global
+                for tok, c in local_counts.items():
+                    self.word2freq[tok] += c
             
-            # build the linked list for each word token as bytes
-            for word, freq in self.word2freq.items():
-                head = self.build_word(word)
-                self.words.append(Word(head=head, freq=freq))
+        # build the linked list for each word token as bytes
+        for word, freq in self.word2freq.items():
+            head = self.build_word(word)
+            self.words.append(Word(head=head, freq=freq))
 
-            # pair occurrence index and pair2count
-            for word_idx, (word, freq) in enumerate(self.word2freq.items()):
-                start_idx = self.words[word_idx].head
-                for i in range(len(word) - 1):
-                    node_idx = start_idx + i
-                    self.pair2occ[(word[i:i+1], word[i+1:i+2])].add((word_idx, node_idx))
-                    self.pair2count[(word[i:i+1], word[i+1:i+2])] += freq
+        # pair occurrence index and pair2count
+        for word_idx, (word, freq) in enumerate(self.word2freq.items()):
+            start_idx = self.words[word_idx].head
+            for i in range(len(word) - 1):
+                node_idx = start_idx + i
+                self.pair2occ[(word[i:i+1], word[i+1:i+2])].add((word_idx, node_idx))
+                self.pair2count[(word[i:i+1], word[i+1:i+2])] += freq
 
-            # count2pairs
-            for pair, count in self.pair2count.items():
-                self.count2pairs[count].add(pair)
+        # count2pairs
+        for pair, count in self.pair2count.items():
+            self.count2pairs[count].add(pair)
                 
         merges, merged = self.bpe()
         vocab_list = [x.encode() for x in self.special_tokens] + [bytes([i]) for i in range(256)] + merged
