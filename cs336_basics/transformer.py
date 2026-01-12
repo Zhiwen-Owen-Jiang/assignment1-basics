@@ -36,3 +36,22 @@ class RMSNorm(nn.Module):
         rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
         results = x / rms * self.g
         return results.to(in_dtype)
+
+
+class SwiGLU(nn.Module):
+    def __init__(self, d_model, d_ff=None):
+        super().__init__()
+        if d_ff is None:
+            d_ff = d_model * 8 // 3
+        self.linear1 = Linear(d_ff, d_model)
+        self.linear2 = Linear(d_model, d_ff)
+        self.linear3 = Linear(d_ff, d_model)
+
+    def _silu(self, x):
+        return x * torch.sigmoid(x)
+
+    def forward(self, x):
+        x1 = self._silu(self.linear1(x))
+        x = x1 * self.linear3(x)
+        x = self.linear2(x)
+        return x

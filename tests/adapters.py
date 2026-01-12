@@ -35,7 +35,7 @@ def run_linear(
 
     linear_layer = transformer.Linear(d_in, d_out)
     linear_layer.load_state_dict({"W": weights})
-    return linear_layer.forward(in_features)
+    return linear_layer(in_features)
 
 
 def run_embedding(
@@ -59,7 +59,7 @@ def run_embedding(
 
     embedding_layer = transformer.Embedding(vocab_size, d_model)
     embedding_layer.load_state_dict({"embedding": weights})
-    return embedding_layer.forward(token_ids)
+    return embedding_layer(token_ids)
 
 
 def run_swiglu(
@@ -91,7 +91,11 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    swiglu_layer = transformer.SwiGLU(d_model, d_ff)
+    swiglu_layer.linear1.W.data = w1_weight
+    swiglu_layer.linear2.W.data = w2_weight
+    swiglu_layer.linear3.W.data = w3_weight
+    return swiglu_layer(in_features)
 
 
 def run_scaled_dot_product_attention(
@@ -388,7 +392,7 @@ def run_rmsnorm(
     """
     rmsnorm_layer = transformer.RMSNorm(d_model, eps)
     rmsnorm_layer.load_state_dict({"g": weights})
-    return rmsnorm_layer.forward(in_features)
+    return rmsnorm_layer(in_features)
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
