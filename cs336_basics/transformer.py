@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from einops import rearrange
+import math
+from einops import einsum, rearrange
 
 
 def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
@@ -9,6 +10,20 @@ def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
     x = ex / torch.sum(ex, dim=dim, keepdim=True)
     return x
 
+
+def scaled_dot_product_attention(Q, K, V, mask=None):
+    d_k = K.shape[-1]
+    if len(K.shape) == 3:
+        scores = einsum(Q, K, "n s_q d, n s_k d -> n s_q s_k") * d_k ** -0.5
+    else:
+        scores = einsum(Q, K, "n h s_q d, n h s_k d -> n h s_q s_k") * d_k ** -0.5
+    
+    if mask is not None:
+        scores = scores.masked_fill(~mask, float("-inf"))
+
+    attn = softmax(scores, dim=-1)
+    return attn @ V
+    
 
 class Linear(nn.Module):
     def __init__(self, in_features, out_features, device=None, dtype=None):
