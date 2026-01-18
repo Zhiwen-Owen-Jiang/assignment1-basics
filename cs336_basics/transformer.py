@@ -179,3 +179,37 @@ class Block(nn.Module):
         mha_out = x + self.mha(self.rms_norm1(x), token_positions)
         ff_out = mha_out + self.ff(self.rms_norm2(mha_out))
         return ff_out
+
+
+class Transformer(nn.Module):
+    def __init__(
+            self,
+            vocab_size,
+            context_length,
+            num_layers,
+            d_model,
+            num_heads,
+            d_ff,
+            theta=None,
+            eps=1e-5,
+            device=None,
+            dtype=None
+        ):
+        super().__init__()
+        self.embedding = Embedding(num_embeddings=vocab_size, embedding_dim=d_model, device=device, dtype=dtype)
+        self.transformer_blocks = nn.ModuleList(
+            [
+                Block(d_model=d_model, num_heads=num_heads, d_ff=d_ff, theta=theta, max_seq_len=context_length, eps=eps, device=device, dtype=dtype)
+                for _ in range(num_layers)
+            ]
+        )
+        self.final_norm = RMSNorm(d_model=d_model, eps=eps, device=device, dtype=dtype)
+        self.final_linear = Linear(in_features=d_model, out_features=vocab_size, device=device, dtype=dtype)
+
+    def forward(self, x, token_positions=None):
+        x = self.embedding(x)
+        for block in self.transformer_blocks:
+            x = block(x, token_positions)
+        x = self.final_norm(x)
+        x = self.final_linear(x)
+        return x
