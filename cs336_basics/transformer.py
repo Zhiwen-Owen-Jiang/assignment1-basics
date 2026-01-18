@@ -3,6 +3,13 @@ import torch.nn as nn
 from einops import rearrange
 
 
+def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
+    x = x - x.max(dim=dim, keepdim=True).values
+    ex = torch.exp(x)
+    x = ex / torch.sum(ex, dim=dim, keepdim=True)
+    return x
+
+
 class Linear(nn.Module):
     def __init__(self, in_features, out_features, device=None, dtype=None):
         super().__init__()
