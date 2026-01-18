@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
-import math
-from einops import einsum, rearrange
+from einops import einsum, rearrange, repeat
 
 
 def softmax(x: torch.Tensor, dim: int) -> torch.Tensor:
@@ -99,9 +98,9 @@ class RotaryPositionalEmbedding(nn.Module):
         assert d == self.d_k and S <= self.max_seq_len
 
         if token_positions.ndim == 1:          # (S,)
-            token_positions = token_positions.unsqueeze(0) # -> (1,S)
+            token_positions = rearrange(token_positions, "s -> 1 s") # -> (1,S)
 
-        x_blk = x.reshape(N, S, d // 2, 2)  # (N,S,B,2) = [even, odd]
+        x_blk = rearrange(x, "n s (d2 two) -> n s d2 two", two=2)  # (N,S,B,2) = [even, odd]
 
         # angles: (N,S,B)
         pos = token_positions.to(self.inv_freq.dtype)      # (N, S)
@@ -119,3 +118,49 @@ class RotaryPositionalEmbedding(nn.Module):
 
         out = rearrange(torch.stack([y0, y1], dim=-1), "n s b r -> n s (b r)")
         return out
+
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model, num_heads, theta=None, max_seq_len=None):
+        super().__init__()
+        assert d_model % num_heads == 0
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d = d_model // num_heads
+
+        self.W_Q = Linear(d_model, d_model)
+        self.W_K = Linear(d_model, d_model)
+        self.W_V = Linear(d_model, d_model)
+        self.W_O = Linear(d_model, d_model)
+
+        self.rope = RotaryPositionalEmbedding(theta, self.d, max_seq_len) if (theta is not None and max_seq_len is not None) else None
+
+    def forward(self, x, token_positions=None):
+        n, s, _ = x.shape
+
+        Q = self.W_Q(x)
+        K = self.W_K(x)
+        V = self.W_V(x)
+
+        Q = rearrange(Q, "n s (h d) -> n h s d", h=self.num_heads)
+        K = rearrange(K, "n s (h d) -> n h s d", h=self.num_heads)
+        V = rearrange(V, "n s (h d) -> n h s d", h=self.num_heads)
+
+        mask = torch.tril(torch.ones(s, s, dtype=torch.bool, device=x.device))
+
+        if self.rope is not None:
+            Qf = rearrange(Q, "n h s d -> (n h) s d")
+            Kf = rearrange(K, "n h s d -> (n h) s d")
+
+            if token_positions.ndim == 1:      # (s,)
+                token_positions = rearrange(token_positions, 's -> 1 s')
+            if token_positions.shape[0] == 1:  # now (1, s)
+                token_positions = repeat(token_positions, '1 s -> n s', n=n)
+            pos = repeat(token_positions, "n s -> (n h) s", h=self.num_heads)  # (n*h, s)
+
+            Q = rearrange(self.rope(Qf, pos), "(n h) s d -> n h s d", n=n, h=self.num_heads)
+            K = rearrange(self.rope(Kf, pos), "(n h) s d -> n h s d", n=n, h=self.num_heads)
+
+        out = scaled_dot_product_attention(Q, K, V, mask)
+        out = rearrange(out, "n h s d -> n s (h d)")
+        return self.W_O(out)
