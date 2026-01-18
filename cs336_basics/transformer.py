@@ -47,8 +47,7 @@ class Embedding(nn.Module):
 class RMSNorm(nn.Module):
     def __init__(self, d_model, eps=1e-5, device=None, dtype=None):
         super().__init__()
-        self.g = nn.Parameter(torch.empty(d_model, dtype=dtype, device=device))
-        nn.init.trunc_normal_(self.g)
+        self.g = nn.Parameter(torch.ones(d_model, device=device, dtype=dtype))
         self.eps = eps
         self.d_model = d_model
 
@@ -61,13 +60,13 @@ class RMSNorm(nn.Module):
 
 
 class SwiGLU(nn.Module):
-    def __init__(self, d_model, d_ff=None):
+    def __init__(self, d_model, d_ff=None, device=None, dtype=None):
         super().__init__()
         if d_ff is None:
             d_ff = d_model * 8 // 3
-        self.linear1 = Linear(d_ff, d_model)
-        self.linear2 = Linear(d_model, d_ff)
-        self.linear3 = Linear(d_ff, d_model)
+        self.linear1 = Linear(d_model, d_ff, device, dtype)
+        self.linear2 = Linear(d_ff, d_model, device, dtype)
+        self.linear3 = Linear(d_model, d_ff, device, dtype)
 
     def _silu(self, x):
         return x * torch.sigmoid(x)
@@ -88,7 +87,7 @@ class RotaryPositionalEmbedding(nn.Module):
         self.max_seq_len = max_seq_len
 
         # inv_freq[j] = theta^(-2j/d)
-        j = torch.arange(0, d_k // 2, device=device, dtype=torch.float32)
+        j = torch.arange(0, d_k // 2, device=device, dtype=dtype)
         inv_freq = self.theta ** (-2.0 * j / d_k)   # (B,)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
@@ -121,19 +120,19 @@ class RotaryPositionalEmbedding(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model, num_heads, theta=None, max_seq_len=None):
+    def __init__(self, d_model, num_heads, theta=None, max_seq_len=None, device=None, dtype=None):
         super().__init__()
         assert d_model % num_heads == 0
         self.d_model = d_model
         self.num_heads = num_heads
         self.d = d_model // num_heads
 
-        self.W_Q = Linear(d_model, d_model)
-        self.W_K = Linear(d_model, d_model)
-        self.W_V = Linear(d_model, d_model)
-        self.W_O = Linear(d_model, d_model)
+        self.W_Q = Linear(d_model, d_model, device, dtype)
+        self.W_K = Linear(d_model, d_model, device, dtype)
+        self.W_V = Linear(d_model, d_model, device, dtype)
+        self.W_O = Linear(d_model, d_model, device, dtype)
 
-        self.rope = RotaryPositionalEmbedding(theta, self.d, max_seq_len) if (theta is not None and max_seq_len is not None) else None
+        self.rope = RotaryPositionalEmbedding(theta, self.d, max_seq_len, device, dtype) if (theta is not None and max_seq_len is not None) else None
 
     def forward(self, x, token_positions=None):
         n, s, _ = x.shape
@@ -149,6 +148,8 @@ class MultiHeadAttention(nn.Module):
         mask = torch.tril(torch.ones(s, s, dtype=torch.bool, device=x.device))
 
         if self.rope is not None:
+            if token_positions is None:
+                token_positions = torch.arange(x.shape[-2])
             Qf = rearrange(Q, "n h s d -> (n h) s d")
             Kf = rearrange(K, "n h s d -> (n h) s d")
 
@@ -164,3 +165,17 @@ class MultiHeadAttention(nn.Module):
         out = scaled_dot_product_attention(Q, K, V, mask)
         out = rearrange(out, "n h s d -> n s (h d)")
         return self.W_O(out)
+
+
+class Block(nn.Module):
+    def __init__(self, d_model, num_heads, d_ff, theta=None, max_seq_len=None, eps=1e-5, device=None, dtype=None):
+        super().__init__()
+        self.rms_norm1 = RMSNorm(d_model, eps, device, dtype)
+        self.rms_norm2 = RMSNorm(d_model, eps, device, dtype)
+        self.mha = MultiHeadAttention(d_model, num_heads, theta, max_seq_len, device, dtype)
+        self.ff = SwiGLU(d_model, d_ff, device, dtype)
+    
+    def forward(self, x, token_positions=None):
+        mha_out = x + self.mha(self.rms_norm1(x), token_positions)
+        ff_out = mha_out + self.ff(self.rms_norm2(mha_out))
+        return ff_out
