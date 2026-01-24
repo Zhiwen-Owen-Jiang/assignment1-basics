@@ -12,6 +12,7 @@ from torch import Tensor
 from cs336_basics.bpe import BPE
 from cs336_basics.tokenizer import Tokenizer
 import cs336_basics.transformer as transformer
+import cs336_basics.utils as utils
 
 
 def run_linear(
@@ -503,7 +504,7 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    return utils.cross_entropy(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
