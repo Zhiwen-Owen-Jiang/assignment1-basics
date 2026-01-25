@@ -51,3 +51,18 @@ class AdamW(torch.optim.Optimizer):
                 state["v"] = updated_v
 
         return loss
+
+
+def learning_rate_schedule(t, alpha_max, alpha_min, t_w, t_c):
+    if t < t_w:
+        return t / t_w * alpha_max
+    elif t >= t_w and t <= t_c:
+        return alpha_min + 0.5 * (1 + math.cos((t - t_w) / (t_c - t_w) * math.pi)) * (alpha_max - alpha_min)
+    else:
+        return alpha_min
+
+
+def gradient_clipping():
+    pass
+
+
